@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>无人机地面站系统</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; font-family:system-ui; }
+        body { background:#1a1a1a; color:white; }
+        .container { display:grid; grid-template-columns:280px 1fr; height:100vh; }
+        .panel { background:#222; padding:16px; border-right:1px solid #444; }
+        .video { background:#000; height:240px; margin-bottom:12px; display:flex; align-items:center; justify-content: center; color:#ccc; }
+        .map { background:#111; height:calc(100% - 240px); position:relative; }
+        .status { margin:10px 0; padding:10px; background:#333; border-radius:6px; }
+        .btn { width:100%; padding:12px; margin:6px 0; background:#0066ff; color:white; border:0; border-radius:6px; font-size:14px; cursor:pointer; }
+        .btn.danger { background:#cc0000; }
+        .btn.warn { background:#ff9900; color:#000; }
+        .log { height:180px; background:#111; padding:8px; font-size:12px; color:#0f0; overflow-y:scroll; margin-top:10px; border:1px solid #444; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="panel">
+        <h2 style="margin-bottom:12px;">📡 无人机地面站</h2>
+
+        <div class="status">
+            <p>连接状态：<span id="conn">未连接</span></p>
+            <p>电量：<span id="bat">0%</span></p>
+            <p>高度：<span id="alt">0m</span></p>
+            <p>速度：<span id="spd">0m/s</span></p>
+            <p>GPS：<span id="gps">0颗</span></p>
+            <p>状态：<span id="state">空闲</span></p>
+        </div>
+
+        <button class="btn" onclick="connect()">连接无人机</button>
+        <button class="btn" onclick="takeoff()">起飞</button>
+        <button class="btn" onclick="land()">降落</button>
+        <button class="btn warn" onclick="returnHome()">返航</button>
+        <button class="btn danger" onclick="stop()">紧急停止</button>
+
+        <button class="btn" style="background:#6e00ff;margin-top:10px;" onclick="startMission()">开始航线任务</button>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <div class="map">
+        <div class="video">
+            实时图传画面
+        </div>
+        <div id="map" style="width:100%;height:calc(100% - 240px);background:#112233;"></div>
+    </div>
+</div>
+
+<script>
+    function $(id) { return document.getElementById(id); }
+    function log(text) {
+        let d = new Date();
+        let t = `${d.getHours()}:${d.getMinutes()}:${d.getSeconds()}`;
+        $("log").innerHTML += `[${t}] ${text}\n`;
+        $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    async function api(url) {
+        try {
+            let res = await fetch("/api" + url);
+            return await res.json();
+        } catch(e) {
+            log("请求失败");
+            return {};
+        }
+    }
+
+    async function connect() {
+        let r = await api("/drone/connect");
+        log(r.msg);
+    }
+
+    async function takeoff() {
+        let r = await api("/drone/takeoff");
+        log(r.msg);
+    }
+
+    async function land() {
+        let r = await api("/drone/land");
+        log(r.msg);
+    }
+
+    async function returnHome() {
+        let r = await api("/drone/returnHome");
+        log(r.msg);
+    }
+
+    async function stop() {
+        log("已紧急停止");
+    }
+
+    async function startMission() {
+        let r = await api("/mission/start");
+        log(r.msg);
+    }
+
+    setInterval(async () => {
+        let data = (await api("/drone/data")).data || {};
+        $("conn").textContent = data.connected ? "已连接" : "未连接";
+        $("bat").textContent = data.battery + "%";
+        $("alt").textContent = data.altitude + "m";
+        $("spd").textContent = data.speed + "m/s";
+        $("gps").textContent = (data.gpsNum || 0) + "颗";
+        $("state").textContent = data.flyStatus || "空闲";
+    }, 1000);
+
+    log("地面站已启动");
+</script>
+</body>
+</html>
