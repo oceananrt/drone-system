@@ -2,29 +2,28 @@ package com.drone.dronesystem.service.impl;
 
 import com.drone.dronesystem.constant.DroneState;
 import com.drone.dronesystem.entity.DroneRealData;
-import com.drone.dronesystem.entity.DroneRawData;
-import com.drone.dronesystem.protocol.*;
+import com.drone.dronesystem.protocol.DroneProtocolAdapter;
 import com.drone.dronesystem.service.*;
+import com.drone.dronesystem.service.DroneWebsocketService;
 import javax.annotation.PostConstruct;
 import org.springframework.stereotype.Service;
-import javax.annotation.Resource;
 
 import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class DroneRealServiceImpl implements DroneRealService {
 
-    @Resource
-    private DroneFlyService droneFlyService;
+    private final DroneProtocolAdapter adapter;
     private final DroneSafetyService safetyService;
     private final DroneLogService logService;
     private final DroneFenceService fenceService;
-    private final DroneRealData droneData = new DroneRealData();
     private final AtomicReference<DroneState> currentState = new AtomicReference<>(DroneState.IDLE);
 
-    public DroneRealServiceImpl(DroneSafetyService safetyService,
+    public DroneRealServiceImpl(DroneProtocolAdapter adapter,
+                                DroneSafetyService safetyService,
                                 DroneLogService logService,
                                 DroneFenceService fenceService) {
+        this.adapter = adapter;
         this.safetyService = safetyService;
         this.logService = logService;
         this.fenceService = fenceService;
@@ -35,16 +34,15 @@ public class DroneRealServiceImpl implements DroneRealService {
         new Thread(() -> {
             while (true) {
                 try {
-                    if (droneData.isConnected()) {
-                        safetyService.checkAllSafety(droneData);
-                        fenceService.checkFence(droneData);
-                        logService.saveFlightLog(droneData);
+                    if (adapter.isConnected()) {
+                        DroneRealData data = adapter.readRealData();
+                        safetyService.checkAllSafety(data);
+                        fenceService.checkFence(data);
+                        logService.saveFlightLog(data);
+                        DroneWebsocketService.broadcast(data);
 
-                        // ======================================
-                        // 🔥 只加这一行：实时推送到网页/手机
-                        // ======================================
-                        DroneWebsocketService.broadcast(droneData);
-
+                        // 定期发送心跳
+                        adapter.sendHeartbeat();
                     }
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -53,45 +51,19 @@ public class DroneRealServiceImpl implements DroneRealService {
                 } catch (Exception ignored) {}
             }
         }, "Drone-Master-Daemon").start();
-        System.out.println("✅ 无人机主守护线程已启动");
+        System.out.println("✅ 无人机主守护线程已启动（协议: " + adapter.getProtocolName() + "）");
     }
 
     @Override
     public DroneRealData getRealData() {
-        if (!droneData.isConnected()) return droneData;
-        byte[] buffer = SerialPortUtil.read();
-        if (buffer == null || buffer.length < 22) return droneData;
-        DroneRawData raw = DroneParser.parse(buffer);
-        if (raw == null) return droneData;
-
-        droneData.setAltitude(raw.altitude / 100.0f);
-        droneData.setSpeed(raw.speed / 100.0f);
-        droneData.setVoltage(raw.voltage / 1000.0f);
-        droneData.setBattery(raw.battery);
-        droneData.setGpsNum(raw.gpsSat);
-        droneData.setLat(raw.lat);
-        droneData.setLng(raw.lng);
-
-        switch (raw.flyMode) {
-            case 0: droneData.setFlyStatus("STANDBY"); break;
-            case 1: droneData.setFlyStatus("FLYING"); break;
-            case 2: droneData.setFlyStatus("LANDING"); break;
-            case 3: droneData.setFlyStatus("RETURNING"); break;
-            case 4: droneData.setFlyStatus("HOVER"); break;
-            default: droneData.setFlyStatus("ERROR");
-        }
-        return droneData;
+        return adapter.readRealData();
     }
 
     @Override
     public boolean connectDrone() {
-        boolean ok = SerialPortUtil.open();
-        droneData.setConnected(ok);
+        boolean ok = adapter.connect();
 
-        // ======================================
-        // 🔥 连接成功/失败推送
-        // ======================================
-        if (ok) DroneWebsocketService.broadcastWarn("✅ 无人机连接成功");
+        if (ok) DroneWebsocketService.broadcastWarn("✅ 无人机连接成功（" + adapter.getProtocolName() + "）");
         else DroneWebsocketService.broadcastWarn("❌ 无人机连接失败");
 
         return ok;
@@ -100,7 +72,7 @@ public class DroneRealServiceImpl implements DroneRealService {
     @Override
     public boolean takeoff() {
         if (!currentState.compareAndSet(DroneState.IDLE, DroneState.TAKEOFF)) return false;
-        boolean ok = DroneSender.send(DroneCmd.TAKEOFF);
+        boolean ok = adapter.takeoff(10);
         currentState.set(DroneState.FLYING);
 
         DroneWebsocketService.broadcastWarn("🚀 无人机已起飞");
@@ -110,7 +82,7 @@ public class DroneRealServiceImpl implements DroneRealService {
     @Override
     public boolean land() {
         currentState.set(DroneState.LANDING);
-        boolean ok = DroneSender.send(DroneCmd.LAND);
+        boolean ok = adapter.land();
         currentState.set(DroneState.IDLE);
 
         DroneWebsocketService.broadcastWarn("🛬 无人机已降落");
@@ -120,7 +92,7 @@ public class DroneRealServiceImpl implements DroneRealService {
     @Override
     public boolean returnHome() {
         currentState.set(DroneState.RETURN_HOME);
-        boolean ok = DroneSender.send(DroneCmd.RETURN_HOME);
+        boolean ok = adapter.returnHome();
         currentState.set(DroneState.IDLE);
 
         DroneWebsocketService.broadcastWarn("📡 无人机正在返航");
@@ -129,7 +101,7 @@ public class DroneRealServiceImpl implements DroneRealService {
 
     @Override
     public boolean hover() {
-        boolean ok = droneFlyService.hover();
+        boolean ok = adapter.hover();
         if (ok) DroneWebsocketService.broadcastWarn("⚡ 无人机已悬停");
         return ok;
     }

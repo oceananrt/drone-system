@@ -1,12 +1,13 @@
 # 🛩️ Drone System — 无人机地面站后端系统
 
-基于 Spring Boot 的无人机地面站后端，支持真机串口通信、飞行控制、电子围栏、航线任务、远程控制、视频图传和 WebSocket 实时数据推送。
+基于 Spring Boot 的无人机地面站后端，支持**三种飞控协议**（自定义协议、MAVLink、DJI Cloud API），可一键切换。支持飞行控制、电子围栏、航线任务、远程控制、视频图传和 WebSocket 实时数据推送。
 
 ---
 
 ## 📋 目录
 
 - [技术栈](#技术栈)
+- [三协议支持](#三协议支持)
 - [项目架构](#项目架构)
 - [功能模块](#功能模块)
 - [快速开始](#快速开始)
@@ -36,6 +37,66 @@
 
 ---
 
+## 三协议支持
+
+项目通过 `DroneProtocolAdapter` 接口支持三种飞控协议，通过配置文件一行切换：
+
+### 协议对比
+
+| 协议 | 适用飞控 | 通信方式 | 配置值 |
+|------|----------|----------|--------|
+| **自定义协议** | 自研飞控 / 按协议对接的飞控 | 串口 (115200/8N1) | `custom` |
+| **MAVLink v1** | Pixhawk / ArduPilot / PX4 | 串口 (57600) 数传电台 | `mavlink` |
+| **DJI Cloud API** | DJI Mavic / Matrice / Phantom | HTTP REST → DJI 云服务器 | `dji` |
+
+### 切换协议
+
+修改 `application.properties`：
+
+```properties
+# 自定义协议（默认）
+drone.protocol.type=custom
+
+# MAVLink（Pixhawk/ArduPilot）
+drone.protocol.type=mavlink
+drone.mavlink.port=COM3
+drone.mavlink.baud=57600
+
+# DJI Cloud API
+drone.protocol.type=dji
+drone.dji.server-url=http://127.0.0.1:8900
+drone.dji.app-id=your_app_id
+drone.dji.app-secret=your_app_secret
+```
+
+### 各协议详情
+
+#### 1. 自定义协议 (custom)
+- 帧头 `AA 55`，上行 22 字节，下行 9/15 字节
+- 串口自动搜索，波特率 115200
+- 适合自研飞控，飞控端需按协议格式收发数据
+
+#### 2. MAVLink v1 (mavlink)
+- 行业标准协议，Pixhawk/ArduPilot/PX4 原生支持
+- 通过数传电台（433MHz/915MHz）无线通信
+- 支持的消息：HEARTBEAT / COMMAND_LONG / SET_POSITION_TARGET_GLOBAL_INT / GPS_RAW_INT / ATTITUDE / SYS_STATUS
+- 内置完整编解码器（CRC-16/MCRF4XX 校验）
+
+#### 3. DJI Cloud API (dji)
+- 通过 DJI Cloud API Server 中转控制 DJI 无人机
+- 架构：`Java后端 → HTTP → DJI Cloud Server → Internet → 飞手端APP → 无人机`
+- 需要在 [DJI 开发者平台](https://developer.dji.com) 注册并部署 Cloud API Server
+- 支持实时遥测、飞行控制、航线任务
+
+### 查看当前协议
+
+```bash
+GET http://localhost:8080/api/drone/protocol
+# 返回：{"code":200,"data":{"type":"custom","connected":false}}
+```
+
+---
+
 ## 项目架构
 
 ```
@@ -46,16 +107,16 @@
                │ WebSocket                        │ HTTP POST
                ▼                                  ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Controller 层 (8 个)                           │
-│  /api/drone/*    飞行控制        /api/fly/*     飞行指令          │
-│  /api/map/*      地图轨迹        /api/mission/* 航线任务          │
-│  /api/task/*     任务队列        /api/video/*   图传拍照          │
-│  /api/remote/*   远程控制        /ws/drone      WebSocket         │
+│                    Controller 层 (7 个)                           │
+│  /api/drone/*    飞行控制+协议查看  /api/fly/*     飞行指令       │
+│  /api/map/*      地图轨迹          /api/mission/* 航线任务       │
+│  /api/task/*     任务队列          /api/video/*   图传拍照       │
+│  /api/remote/*   远程控制          /ws/drone      WebSocket      │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────▼───────────────────────────────────┐
 │                    Service 层 (12 个)                             │
-│  DroneRealService    ← 核心守护线程：轮询串口 → 安全/围栏/日志    │
+│  DroneRealService    ← 核心守护线程：轮询 → 安全/围栏/日志        │
 │  DroneFlyService     ← 起飞/降落/悬停/返航/设高/飞到GPS          │
 │  DroneSafetyService  ← 电量/GPS/高度 三级安全检查                 │
 │  DroneFenceService   ← 电子围栏（经纬度+限高）                    │
@@ -67,21 +128,26 @@
 │  DroneLogService     ← 飞行日志持久化                             │
 │  DroneWebsocketService ← WebSocket 广播                          │
 └──────────────────────────────┬───────────────────────────────────┘
-                               │
+                               │ 注入 DroneProtocolAdapter
 ┌──────────────────────────────▼───────────────────────────────────┐
-│                    Protocol 层                                    │
-│  SerialPortUtil   ← jSerialComm 串口读写 (115200/8N1)            │
-│  DroneParser      ← 二进制协议解析器                              │
-│  DroneSender      ← 指令组帧 + 发送 (帧头AA55 + 帧尾0D0A)        │
-│  DroneCmd         ← 指令枚举 (CONNECT/TAKEOFF/LAND/...)          │
-│  DroneHeartbeat   ← 心跳包                                       │
-│  MavLinkUtil      ← MAVLink 协议（待对接真机飞控）               │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   飞控 / 数传电台     │
-                    │  (串口 / MAVLink)    │
-                    └─────────────────────┘
+│              Protocol 适配器层（DroneProtocolAdapter 接口）        │
+│                                                                  │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│  │ CustomProtocol   │  │ MavLinkProtocol  │  │ DjiCloud       │  │
+│  │ Adapter          │  │ Adapter          │  │ ProtocolAdapter│  │
+│  │                  │  │                  │  │                │  │
+│  │ 自定义二进制协议  │  │ MAVLink v1 标准  │  │ DJI Cloud API  │  │
+│  │ 帧头AA55         │  │ Pixhawk/ArduPilot│  │ HTTP REST      │  │
+│  │ 串口 115200      │  │ 数传 57600       │  │ DJI 云服务器    │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └───────┬────────┘  │
+└───────────┼─────────────────────┼─────────────────────┼──────────┘
+            │                     │                     │
+   ┌────────▼────────┐   ┌───────▼────────┐   ┌───────▼────────┐
+   │ 自研飞控         │   │ Pixhawk 飞控    │   │ DJI 无人机      │
+   │ (USB/TTL串口)    │   │ (数传电台)      │   │ (Cloud API)     │
+   └─────────────────┘   └────────────────┘   └────────────────┘
+
+   application.properties → drone.protocol.type=custom|mavlink|dji
 ```
 
 ### 核心数据流
@@ -252,7 +318,8 @@ http://localhost:8080
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/drone/connect` | 连接无人机（串口） |
+| GET | `/api/drone/protocol` | 查看当前协议类型和连接状态 |
+| POST | `/api/drone/connect` | 连接无人机 |
 | GET | `/api/drone/data` | 获取实时数据 |
 | POST | `/api/drone/takeoff` | 起飞 |
 | POST | `/api/drone/land` | 降落 |
@@ -612,6 +679,27 @@ server.port=9090
 2. 没有代理拦截 WebSocket 请求
 3. 浏览器支持 WebSocket
 
+### Q: 如何切换到 MAVLink 协议？
+**A:** 修改 `application.properties`：
+```properties
+drone.protocol.type=mavlink
+drone.mavlink.port=COM3
+drone.mavlink.baud=57600
+```
+重启应用即可。
+
+### Q: 如何连接 DJI 无人机？
+**A:** 需要三步：
+1. 在 [DJI 开发者平台](https://developer.dji.com) 注册应用，获取 App ID 和 App Secret
+2. 部署 DJI Cloud API Server（推荐 Docker）
+3. 配置 `application.properties`：
+```properties
+drone.protocol.type=dji
+drone.dji.server-url=http://your-server:8900
+drone.dji.app-id=your_app_id
+drone.dji.app-secret=your_app_secret
+```
+
 ### Q: 串口连接失败
 **A:** 
 1. 确认无人机已通过 USB/数传连接电脑
@@ -647,14 +735,15 @@ drone-system/
     │   │   │   ├── DroneStatus.java           #   状态枚举
     │   │   │   └── GlobalExceptionHandler.java#   全局异常处理
     │   │   ├── config/                        # 配置
-    │   │   │   └── WebSocketConfig.java       #   WebSocket 配置
+    │   │   │   ├── WebSocketConfig.java       #   WebSocket 配置
+    │   │   │   └── DroneProtocolConfig.java   #   协议适配器配置
     │   │   ├── constant/                      # 常量
     │   │   │   ├── DroneSafetyConstant.java   #   安全参数
     │   │   │   ├── DroneState.java            #   飞行状态枚举
     │   │   │   ├── RemoteConstant.java        #   远程控制参数
     │   │   │   ├── TaskType.java              #   任务类型枚举
     │   │   │   └── VideoConstant.java         #   视频参数
-    │   │   ├── controller/                    # 控制器 (8个)
+    │   │   ├── controller/                    # 控制器 (7个)
     │   │   │   ├── DroneMasterController.java #   真机主控 API
     │   │   │   ├── DroneFlyController.java    #   飞行指令 API
     │   │   │   ├── DroneMapController.java    #   地图 API
@@ -670,12 +759,21 @@ drone-system/
     │   │   │   ├── DroneTask.java             #   任务
     │   │   │   └── DroneWaypoint.java         #   航点
     │   │   ├── protocol/                      # 通信协议
+    │   │   │   ├── DroneProtocolAdapter.java  #   协议适配器接口
     │   │   │   ├── SerialPortUtil.java        #   串口工具
-    │   │   │   ├── DroneParser.java           #   协议解析器
-    │   │   │   ├── DroneSender.java           #   指令发送器
+    │   │   │   ├── DroneParser.java           #   自定义协议解析器
+    │   │   │   ├── DroneSender.java           #   自定义指令发送器
     │   │   │   ├── DroneCmd.java              #   指令枚举
     │   │   │   ├── DroneHeartbeat.java        #   心跳包
-    │   │   │   └── MavLinkUtil.java           #   MAVLink (待实现)
+    │   │   │   ├── adapter/                   #   协议适配器实现
+    │   │   │   │   ├── CustomProtocolAdapter.java    # 自定义协议
+    │   │   │   │   ├── MavLinkProtocolAdapter.java   # MAVLink 协议
+    │   │   │   │   └── DjiCloudProtocolAdapter.java  # DJI Cloud API
+    │   │   │   ├── mavlink/                   #   MAVLink 编解码
+    │   │   │   │   ├── MavLinkMessage.java    #     消息结构
+    │   │   │   │   └── MavLinkCodec.java      #     编解码+CRC
+    │   │   │   └── dji/                       #   DJI Cloud API
+    │   │   │       └── DjiCloudClient.java    #     HTTP 客户端
     │   │   ├── repository/                    # 数据访问
     │   │   │   └── DroneFlightLogRepository.java
     │   │   └── service/                       # 服务层
@@ -705,7 +803,9 @@ drone-system/
 
 ## 开发计划
 
-- [ ] MAVLink 协议完整对接（Pixhawk / ArduPilot）
+- [x] MAVLink 协议完整对接（Pixhawk / ArduPilot）
+- [x] DJI Cloud API 对接（DJI 系列无人机）
+- [x] 协议适配器架构（一行配置切换协议）
 - [ ] 围栏参数外部配置化
 - [ ] 用户认证与权限控制
 - [ ] MySQL / PostgreSQL 生产数据库支持

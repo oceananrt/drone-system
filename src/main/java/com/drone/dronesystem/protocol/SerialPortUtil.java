@@ -41,6 +41,25 @@ public class SerialPortUtil {
     }
 
     /**
+     * 打开指定串口
+     * @param portName 串口名（如 COM3、/dev/ttyUSB0）
+     * @param baudRate 波特率
+     */
+    public static boolean openPort(String portName, int baudRate) {
+        try {
+            serialPort = SerialPort.getCommPort(portName);
+            serialPort.setBaudRate(baudRate);
+            serialPort.setNumDataBits(8);
+            serialPort.setNumStopBits(1);
+            serialPort.setParity(SerialPort.NO_PARITY);
+            return serialPort.openPort();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
      * 关闭串口
      */
     public static void close() {

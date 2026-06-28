@@ -2,8 +2,12 @@ package com.drone.dronesystem.controller;
 
 import com.drone.dronesystem.common.Result;
 import com.drone.dronesystem.entity.DroneRealData;
+import com.drone.dronesystem.protocol.DroneProtocolAdapter;
 import com.drone.dronesystem.service.DroneRealService;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/drone")
@@ -11,9 +15,22 @@ import org.springframework.web.bind.annotation.*;
 public class DroneMasterController {
 
     private final DroneRealService droneRealService;
+    private final DroneProtocolAdapter adapter;
 
-    public DroneMasterController(DroneRealService droneRealService) {
+    public DroneMasterController(DroneRealService droneRealService, DroneProtocolAdapter adapter) {
         this.droneRealService = droneRealService;
+        this.adapter = adapter;
+    }
+
+    /**
+     * 查看当前协议类型
+     */
+    @GetMapping("/protocol")
+    public Result<Map<String, Object>> protocol() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("type", adapter.getProtocolName());
+        info.put("connected", adapter.isConnected());
+        return Result.success(info);
     }
 
     @PostMapping("/connect")

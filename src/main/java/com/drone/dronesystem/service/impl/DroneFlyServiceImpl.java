@@ -1,41 +1,45 @@
 package com.drone.dronesystem.service.impl;
 
-import com.drone.dronesystem.protocol.DroneCmd;
-import com.drone.dronesystem.protocol.DroneSender;
+import com.drone.dronesystem.protocol.DroneProtocolAdapter;
 import com.drone.dronesystem.service.DroneFlyService;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DroneFlyServiceImpl implements DroneFlyService {
 
+    private final DroneProtocolAdapter adapter;
+
+    public DroneFlyServiceImpl(DroneProtocolAdapter adapter) {
+        this.adapter = adapter;
+    }
+
     @Override
     public boolean takeoff(int height) {
-        // 下发起飞指令 + 目标高度
-        return DroneSender.sendWithData(DroneCmd.TAKEOFF, height);
+        return adapter.takeoff(height);
     }
 
     @Override
     public boolean land() {
-        return DroneSender.send(DroneCmd.LAND);
+        return adapter.land();
     }
 
     @Override
     public boolean hover() {
-        return DroneSender.send(DroneCmd.HOVER);
+        return adapter.hover();
     }
 
     @Override
     public boolean returnHome() {
-        return DroneSender.send(DroneCmd.RETURN_HOME);
+        return adapter.returnHome();
     }
 
     @Override
     public boolean setHeight(int height) {
-        return DroneSender.sendWithData(DroneCmd.SET_ALT, height);
+        return adapter.setAltitude(height);
     }
 
     @Override
     public boolean goTo(double lat, double lng, int height) {
-        return DroneSender.sendGpsCommand(lat, lng, height);
+        return adapter.goTo(lat, lng, height);
     }
 }
