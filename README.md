@@ -46,7 +46,7 @@
 | 协议 | 适用飞控 | 通信方式 | 配置值 |
 |------|----------|----------|--------|
 | **自定义协议** | 自研飞控 / 按协议对接的飞控 | 串口 (115200/8N1) | `custom` |
-| **MAVLink v1** | Pixhawk / ArduPilot / PX4 | 串口 (57600) 数传电台 | `mavlink` |
+| **MAVLink v1/v2** | Pixhawk / ArduPilot / PX4 | 串口 (57600) 数传电台 | `mavlink` |
 | **DJI Cloud API** | DJI Mavic / Matrice / Phantom | HTTP REST → DJI 云服务器 | `dji` |
 
 ### 切换协议
@@ -76,11 +76,13 @@ drone.dji.app-secret=your_app_secret
 - 串口自动搜索，波特率 115200
 - 适合自研飞控，飞控端需按协议格式收发数据
 
-#### 2. MAVLink v1 (mavlink)
+#### 2. MAVLink v1/v2 (mavlink)
 - 行业标准协议，Pixhawk/ArduPilot/PX4 原生支持
+- **自动识别 v1（0xFE）和 v2（0xFD）帧**，兼容所有飞控固件
 - 通过数传电台（433MHz/915MHz）无线通信
-- 支持的消息：HEARTBEAT / COMMAND_LONG / SET_POSITION_TARGET_GLOBAL_INT / GPS_RAW_INT / ATTITUDE / SYS_STATUS
-- 内置完整编解码器（CRC-16/MCRF4XX 校验）
+- 支持的消息：HEARTBEAT / COMMAND_LONG / SET_POSITION_TARGET_GLOBAL_INT / GPS_RAW_INT / GLOBAL_POSITION_INT / ATTITUDE / SYS_STATUS / COMMAND_ACK
+- 从 HEARTBEAT 自动推断 ArduCopter 飞行模式（AUTO/GUIDED/RTL/LOITER/LAND）
+- 内置完整编解码器（CRC-16/MCRF4XX 校验，含 v2 的 3 字节消息 ID）
 
 #### 3. DJI Cloud API (dji)
 - 通过 DJI Cloud API Server 中转控制 DJI 无人机
@@ -136,7 +138,7 @@ GET http://localhost:8080/api/drone/protocol
 │  │ CustomProtocol   │  │ MavLinkProtocol  │  │ DjiCloud       │  │
 │  │ Adapter          │  │ Adapter          │  │ ProtocolAdapter│  │
 │  │                  │  │                  │  │                │  │
-│  │ 自定义二进制协议  │  │ MAVLink v1 标准  │  │ DJI Cloud API  │  │
+│  │ 自定义二进制协议  │  │ MAVLink v1+v2    │  │ DJI Cloud API  │  │
 │  │ 帧头AA55         │  │ Pixhawk/ArduPilot│  │ HTTP REST      │  │
 │  │ 串口 115200      │  │ 数传 57600       │  │ DJI 云服务器    │  │
 │  └────────┬─────────┘  └────────┬─────────┘  └───────┬────────┘  │
@@ -153,17 +155,22 @@ GET http://localhost:8080/api/drone/protocol
 ### 核心数据流
 
 ```
-飞控 ──串口──→ SerialPortUtil.read()
-                    ↓
-              DroneParser.parse() → DroneRawData
-                    ↓
-         DroneRealServiceImpl.getRealData() → DroneRealData
-                    ↓
-         守护线程（1秒轮询）
-              ├── SafetyService  → 电量低? 强制返航/降落
-              ├── FenceService   → 超出围栏? 强制悬停
-              ├── LogService     → 保存飞行日志到数据库
-              └── WebSocket      → 实时推送到前端页面
+飞控 ──串口/网络──→ DroneProtocolAdapter.readRealData()
+                         ↓
+                   各适配器内部解析
+                   (Custom: DroneParser / MAVLink: MavLinkCodec / DJI: JSON)
+                         ↓
+              DroneRealServiceImpl 守护线程（1秒轮询）
+                   ├── SafetyService  → 电量低? 强制返航/降落
+                   ├── FenceService   → 超出围栏? 强制悬停
+                   ├── LogService     → 保存飞行日志到数据库
+                   └── WebSocket      → 实时推送到前端页面
+
+指令下发：
+DroneFlyService → DroneProtocolAdapter.takeoff/land/hover/...
+                  ↓
+            各适配器内部组帧发送
+            (Custom: DroneSender / MAVLink: MavLinkCodec.encode / DJI: HTTP POST)
 ```
 
 ---
@@ -441,7 +448,18 @@ ws://localhost:8080/ws/drone
 
 ## 通信协议
 
-### 串口配置
+### 协议适配器架构
+
+```
+DroneProtocolAdapter（接口）
+├── CustomProtocolAdapter    → SerialPortUtil + DroneParser + DroneSender
+├── MavLinkProtocolAdapter   → SerialPortUtil + MavLinkCodec（v1/v2 自动识别）
+└── DjiCloudProtocolAdapter  → DjiCloudClient（HTTP REST）
+```
+
+服务层通过 `DroneProtocolAdapter` 接口注入，不关心底层协议细节。切换协议只需改 `application.properties` 中一行配置。
+
+### 自定义协议 — 串口配置
 
 | 参数 | 值 |
 |------|------|
@@ -493,6 +511,49 @@ AA 55 00 0D 0A
 ```
 
 每秒发送一次，保持连接。
+
+### MAVLink 协议
+
+#### 帧结构
+
+**v1 帧（发送用）：**
+```
+| STX=0xFE(1B) | LEN(1B) | SEQ(1B) | SYS(1B) | COMP(1B) | MSG(1B) | PAYLOAD(0-255B) | CRC(2B) |
+```
+
+**v2 帧（接收解析，Pixhawk 默认）：**
+```
+| STX=0xFD(1B) | LEN(1B) | INCOMPAT(1B) | COMPAT(1B) | SEQ(1B) | SYS(1B) | COMP(1B) | MSG(3B) | PAYLOAD(0-255B) | CRC(2B) | [SIGN(13B)] |
+```
+
+编解码器自动识别 v1/v2 帧头，CRC 使用 CRC-16/MCRF4XX 算法。
+
+#### 支持的 MAVLink 消息
+
+| 消息 | ID | 方向 | 用途 |
+|------|----|------|------|
+| HEARTBEAT | 0 | 双向 | 连接心跳、飞行模式检测 |
+| SYS_STATUS | 1 | 上行 | 电压、电量 |
+| GPS_RAW_INT | 24 | 上行 | GPS 数据 |
+| ATTITUDE | 30 | 上行 | 姿态（横滚/俯仰/偏航） |
+| GLOBAL_POSITION_INT | 33 | 上行 | GPS+相对高度+速度 |
+| COMMAND_LONG | 76 | 下行 | 起飞/降落/返航/设模式 |
+| COMMAND_ACK | 77 | 上行 | 指令确认 |
+| SET_POSITION_TARGET_GLOBAL_INT | 86 | 下行 | GPS 坐标飞行 |
+
+#### ArduCopter 飞行模式识别
+
+从 HEARTBEAT 的 `custom_mode` 自动推断：
+
+| custom_mode | ArduCopter 模式 | 显示状态 |
+|-------------|-----------------|----------|
+| 0 | STABILIZE | HOVER |
+| 2 | ALT_HOLD | HOVER |
+| 3 | AUTO | FLYING |
+| 4 | GUIDED | FLYING |
+| 5 | LOITER | HOVER |
+| 6 | RTL | RETURNING |
+| 9 | LAND | LANDING |
 
 ---
 
@@ -803,7 +864,8 @@ drone-system/
 
 ## 开发计划
 
-- [x] MAVLink 协议完整对接（Pixhawk / ArduPilot）
+- [x] MAVLink v1/v2 协议完整对接（Pixhawk / ArduPilot / PX4）
+- [x] MAVLink ArduCopter 飞行模式自动识别
 - [x] DJI Cloud API 对接（DJI 系列无人机）
 - [x] 协议适配器架构（一行配置切换协议）
 - [ ] 围栏参数外部配置化
