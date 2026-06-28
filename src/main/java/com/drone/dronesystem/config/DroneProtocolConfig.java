@@ -13,12 +13,12 @@ import org.springframework.context.annotation.Configuration;
  * 协议适配器配置
  * 通过 application.properties 中的 drone.protocol.type 选择协议
  *
- * 可选值：custom / mavlink / dji
+ * 可选值：custom(默认) / mavlink / dji
  */
 @Configuration
 public class DroneProtocolConfig {
 
-    // ==================== 自定义协议 ====================
+    // ==================== 自定义协议（默认） ====================
     @Bean
     @ConditionalOnProperty(name = "drone.protocol.type", havingValue = "custom", matchIfMissing = true)
     public DroneProtocolAdapter customProtocolAdapter() {

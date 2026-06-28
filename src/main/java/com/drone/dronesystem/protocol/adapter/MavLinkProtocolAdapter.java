@@ -150,9 +150,26 @@ public class MavLinkProtocolAdapter implements DroneProtocolAdapter {
                 // 从心跳包获取飞控系统 ID
                 int type = MavLinkCodec.parseHeartbeatType(msg);
                 if (type >= 0 && type <= 20) {
-                    // 是飞控的心跳（type 0-20 是飞机类型）
                     targetSystemId = msg.systemId;
                     targetComponentId = msg.componentId;
+
+                    // 从 base_mode + custom_mode 推断飞行状态
+                    if (msg.payload.length >= 8) {
+                        int baseMode = msg.getPayloadUint8(2);
+                        int customMode = msg.getPayloadInt32(3);
+
+                        // bit 7 of base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+                        if ((baseMode & 0x80) != 0) {
+                            // ArduCopter custom_mode: 0=STABILIZE, 2=ALT_HOLD, 3=AUTO, 4=GUIDED, 5=LOITER, 6=RTL, 9=LAND
+                            switch (customMode) {
+                                case 0: case 2: case 5: droneData.setFlyStatus("HOVER"); break;
+                                case 3: case 4: droneData.setFlyStatus("FLYING"); break;
+                                case 6: droneData.setFlyStatus("RETURNING"); break;
+                                case 9: droneData.setFlyStatus("LANDING"); break;
+                                default: droneData.setFlyStatus("FLYING"); break;
+                            }
+                        }
+                    }
                 }
                 break;
 
@@ -163,6 +180,18 @@ public class MavLinkProtocolAdapter implements DroneProtocolAdapter {
                     droneData.setLng(gps[1]);
                     droneData.setAltitude((float) gps[2]);
                     droneData.setGpsNum((float) gps[3]);
+                }
+                break;
+
+            case MavLinkMessage.MSG_ID_GLOBAL_POSITION_INT:
+                // ArduPilot 经常发这个消息代替 GPS_RAW_INT
+                double[] gpos = MavLinkCodec.parseGlobalPositionInt(msg);
+                if (gpos != null) {
+                    droneData.setLat(gpos[0]);
+                    droneData.setLng(gpos[1]);
+                    droneData.setAltitude((float) gpos[3]); // relative_alt 更准确
+                    // 速度 = sqrt(vx^2 + vy^2)
+                    droneData.setSpeed((float) Math.sqrt(gpos[4] * gpos[4] + gpos[5] * gpos[5]));
                 }
                 break;
 
