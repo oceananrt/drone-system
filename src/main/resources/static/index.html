@@ -7,14 +7,21 @@
         * { margin:0; padding:0; box-sizing:border-box; font-family:system-ui; }
         body { background:#1a1a1a; color:white; }
         .container { display:grid; grid-template-columns:280px 1fr; height:100vh; }
-        .panel { background:#222; padding:16px; border-right:1px solid #444; }
+        .panel { background:#222; padding:16px; border-right:1px solid #444; overflow-y:auto; }
         .video { background:#000; height:240px; margin-bottom:12px; display:flex; align-items:center; justify-content: center; color:#ccc; }
         .map { background:#111; height:calc(100% - 240px); position:relative; }
         .status { margin:10px 0; padding:10px; background:#333; border-radius:6px; }
+        .status p { margin:4px 0; font-size:13px; }
         .btn { width:100%; padding:12px; margin:6px 0; background:#0066ff; color:white; border:0; border-radius:6px; font-size:14px; cursor:pointer; }
+        .btn:hover { opacity:0.85; }
+        .btn:active { opacity:0.7; }
         .btn.danger { background:#cc0000; }
         .btn.warn { background:#ff9900; color:#000; }
+        .btn:disabled { background:#555; cursor:not-allowed; opacity:0.6; }
         .log { height:180px; background:#111; padding:8px; font-size:12px; color:#0f0; overflow-y:scroll; margin-top:10px; border:1px solid #444; }
+        .conn-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
+        .conn-dot.on { background:#0f0; }
+        .conn-dot.off { background:#f00; }
     </style>
 </head>
 <body>
@@ -23,6 +30,7 @@
         <h2 style="margin-bottom:12px;">📡 无人机地面站</h2>
 
         <div class="status">
+            <p><span class="conn-dot off" id="wsDot"></span>WebSocket：<span id="wsStatus">未连接</span></p>
             <p>连接状态：<span id="conn">未连接</span></p>
             <p>电量：<span id="bat">0%</span></p>
             <p>高度：<span id="alt">0m</span></p>
@@ -51,64 +59,101 @@
 </div>
 
 <script>
+    // ========== 工具函数 ==========
     function $(id) { return document.getElementById(id); }
     function log(text) {
         let d = new Date();
-        let t = `${d.getHours()}:${d.getMinutes()}:${d.getSeconds()}`;
+        let t = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
         $("log").innerHTML += `[${t}] ${text}\n`;
         $("log").scrollTop = $("log").scrollHeight;
     }
 
-    async function api(url) {
+    // ========== HTTP API（POST 指令） ==========
+    async function apiPost(url) {
         try {
-            let res = await fetch("/api" + url);
+            let res = await fetch("/api" + url, { method: "POST" });
             return await res.json();
         } catch(e) {
-            log("请求失败");
+            log("❌ 请求失败：" + e.message);
             return {};
         }
     }
 
-    async function connect() {
-        let r = await api("/drone/connect");
-        log(r.msg);
+    async function connect()      { let r = await apiPost("/drone/connect");    log(r.msg); }
+    async function takeoff()      { let r = await apiPost("/drone/takeoff");    log(r.msg); }
+    async function land()         { let r = await apiPost("/drone/land");       log(r.msg); }
+    async function returnHome()   { let r = await apiPost("/drone/returnHome");log(r.msg); }
+    async function startMission() { let r = await apiPost("/mission/start");   log(r.msg); }
+    function stop() { log("⚠️ 已紧急停止"); }
+
+    // ========== WebSocket 实时数据 ==========
+    let ws = null;
+    let wsRetryCount = 0;
+    const MAX_RETRY = 10;
+
+    function connectWebSocket() {
+        let protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        let wsUrl = protocol + "//" + location.host + "/ws/drone";
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = function() {
+            wsRetryCount = 0;
+            $("wsDot").className = "conn-dot on";
+            $("wsStatus").textContent = "已连接";
+            log("✅ WebSocket 已连接");
+        };
+
+        ws.onmessage = function(event) {
+            try {
+                let msg = JSON.parse(event.data);
+
+                // 警告消息
+                if (msg.warn) {
+                    log("⚠️ " + msg.warn);
+                    return;
+                }
+
+                // 实时数据更新
+                $("conn").textContent = msg.connected ? "已连接" : "未连接";
+                $("bat").textContent = (msg.battery || 0) + "%";
+                $("alt").textContent = (msg.altitude || 0).toFixed(1) + "m";
+                $("spd").textContent = (msg.speed || 0).toFixed(1) + "m/s";
+                $("gps").textContent = (msg.gpsNum || 0) + "颗";
+                $("state").textContent = msg.flyStatus || "空闲";
+
+                // 电量颜色
+                let bat = msg.battery || 0;
+                $("bat").style.color = bat <= 10 ? "#f00" : bat <= 20 ? "#ff0" : "#0f0";
+            } catch(e) {
+                // 非 JSON 消息，忽略
+            }
+        };
+
+        ws.onclose = function() {
+            $("wsDot").className = "conn-dot off";
+            $("wsStatus").textContent = "已断开";
+            log("❌ WebSocket 已断开");
+
+            // 自动重连
+            if (wsRetryCount < MAX_RETRY) {
+                wsRetryCount++;
+                let delay = Math.min(1000 * Math.pow(2, wsRetryCount), 30000);
+                log(`⏳ ${delay/1000}秒后尝试重连 (${wsRetryCount}/${MAX_RETRY})...`);
+                setTimeout(connectWebSocket, delay);
+            } else {
+                log("❌ 重连次数已达上限，请刷新页面");
+            }
+        };
+
+        ws.onerror = function() {
+            log("❌ WebSocket 连接错误");
+        };
     }
 
-    async function takeoff() {
-        let r = await api("/drone/takeoff");
-        log(r.msg);
-    }
-
-    async function land() {
-        let r = await api("/drone/land");
-        log(r.msg);
-    }
-
-    async function returnHome() {
-        let r = await api("/drone/returnHome");
-        log(r.msg);
-    }
-
-    async function stop() {
-        log("已紧急停止");
-    }
-
-    async function startMission() {
-        let r = await api("/mission/start");
-        log(r.msg);
-    }
-
-    setInterval(async () => {
-        let data = (await api("/drone/data")).data || {};
-        $("conn").textContent = data.connected ? "已连接" : "未连接";
-        $("bat").textContent = data.battery + "%";
-        $("alt").textContent = data.altitude + "m";
-        $("spd").textContent = data.speed + "m/s";
-        $("gps").textContent = (data.gpsNum || 0) + "颗";
-        $("state").textContent = data.flyStatus || "空闲";
-    }, 1000);
-
+    // ========== 启动 ==========
     log("地面站已启动");
+    connectWebSocket();
 </script>
 </body>
 </html>

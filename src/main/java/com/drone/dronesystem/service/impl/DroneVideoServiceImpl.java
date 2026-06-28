@@ -3,7 +3,7 @@ package com.drone.dronesystem.service.impl;
 import com.drone.dronesystem.service.DroneVideoService;
 import org.springframework.stereotype.Service;
 // ✅ 1. 补全正确的导入（Spring 标准）
-import jakarta.annotation.PreDestroy;
+import javax.annotation.PreDestroy;
 
 import java.io.File;
 import java.text.SimpleDateFormat;

@@ -6,8 +6,7 @@ import com.drone.dronesystem.service.DroneRealService;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-// 🔥 只改这一行！改成唯一地址，解决冲突！
-@RequestMapping("/api/master/drone")
+@RequestMapping("/api/drone")
 @CrossOrigin
 public class DroneMasterController {
 

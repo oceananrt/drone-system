@@ -5,12 +5,11 @@ import com.drone.dronesystem.entity.DroneRealData;
 import com.drone.dronesystem.entity.DroneRawData;
 import com.drone.dronesystem.protocol.*;
 import com.drone.dronesystem.service.*;
-import jakarta.annotation.PostConstruct;
+import javax.annotation.PostConstruct;
 import org.springframework.stereotype.Service;
-import jakarta.annotation.Resource;
+import javax.annotation.Resource;
 
-// 🔥 只多这一个导入（WebSocket）
-import com.drone.dronesystem.service.DroneWebsocketService;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class DroneRealServiceImpl implements DroneRealService {
@@ -21,7 +20,7 @@ public class DroneRealServiceImpl implements DroneRealService {
     private final DroneLogService logService;
     private final DroneFenceService fenceService;
     private final DroneRealData droneData = new DroneRealData();
-    private DroneState currentState = DroneState.IDLE;
+    private final AtomicReference<DroneState> currentState = new AtomicReference<>(DroneState.IDLE);
 
     public DroneRealServiceImpl(DroneSafetyService safetyService,
                                 DroneLogService logService,
@@ -100,10 +99,9 @@ public class DroneRealServiceImpl implements DroneRealService {
 
     @Override
     public boolean takeoff() {
-        if (currentState != DroneState.IDLE) return false;
-        currentState = DroneState.TAKEOFF;
+        if (!currentState.compareAndSet(DroneState.IDLE, DroneState.TAKEOFF)) return false;
         boolean ok = DroneSender.send(DroneCmd.TAKEOFF);
-        currentState = DroneState.FLYING;
+        currentState.set(DroneState.FLYING);
 
         DroneWebsocketService.broadcastWarn("🚀 无人机已起飞");
         return ok;
@@ -111,9 +109,9 @@ public class DroneRealServiceImpl implements DroneRealService {
 
     @Override
     public boolean land() {
-        currentState = DroneState.LANDING;
+        currentState.set(DroneState.LANDING);
         boolean ok = DroneSender.send(DroneCmd.LAND);
-        currentState = DroneState.IDLE;
+        currentState.set(DroneState.IDLE);
 
         DroneWebsocketService.broadcastWarn("🛬 无人机已降落");
         return ok;
@@ -121,9 +119,9 @@ public class DroneRealServiceImpl implements DroneRealService {
 
     @Override
     public boolean returnHome() {
-        currentState = DroneState.RETURN_HOME;
+        currentState.set(DroneState.RETURN_HOME);
         boolean ok = DroneSender.send(DroneCmd.RETURN_HOME);
-        currentState = DroneState.IDLE;
+        currentState.set(DroneState.IDLE);
 
         DroneWebsocketService.broadcastWarn("📡 无人机正在返航");
         return ok;

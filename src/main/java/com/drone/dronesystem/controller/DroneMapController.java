@@ -3,9 +3,7 @@ package com.drone.dronesystem.controller;
 import com.drone.dronesystem.common.Result;
 import com.drone.dronesystem.entity.DroneLocation;
 import com.drone.dronesystem.service.DroneMapService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -32,7 +30,7 @@ public class DroneMapController {
     }
 
     // 清空轨迹
-    @GetMapping("/clear")
+    @PostMapping("/clear")
     public Result<String> clear() {
         droneMapService.clearPath();
         return Result.success("轨迹已清空");

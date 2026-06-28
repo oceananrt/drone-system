@@ -1,8 +1,8 @@
 package com.drone.dronesystem.service;
 
 import com.drone.dronesystem.entity.DroneRealData;
-import jakarta.websocket.*;
-import jakarta.websocket.server.ServerEndpoint;
+import javax.websocket.*;
+import javax.websocket.server.ServerEndpoint;
 import org.springframework.stereotype.Component;
 import com.alibaba.fastjson2.JSON;
 

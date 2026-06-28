@@ -36,7 +36,6 @@ public class DroneFlyServiceImpl implements DroneFlyService {
 
     @Override
     public boolean goTo(double lat, double lng, int height) {
-        // 真实项目：GPS坐标组包
-        return false;
+        return DroneSender.sendGpsCommand(lat, lng, height);
     }
 }

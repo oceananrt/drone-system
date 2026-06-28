@@ -69,7 +69,8 @@ public class DroneRemoteServiceImpl implements DroneRemoteService {
         if (!connected || controlSocket == null || controlSocket.isClosed()) {
             return false;
         }
-        try (OutputStream out = controlSocket.getOutputStream()) {
+        try {
+            OutputStream out = controlSocket.getOutputStream();
             out.write((statusJson + "\n").getBytes());
             out.flush();
             return true;
@@ -96,7 +97,8 @@ public class DroneRemoteServiceImpl implements DroneRemoteService {
     @Override
     public void receiveCommandFromServer() {
         if (controlSocket == null) return;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()))) {
+        try {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
             String command;
             while ((command = reader.readLine()) != null) {
                 handleCommand(command);
